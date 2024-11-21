@@ -3,6 +3,266 @@ use crate::details::distance::MetricUsize;
 use crate::distance::indel;
 use crate::HashableChar;
 
+pub fn token_ratio_with_args<Iter1, Iter2, CutoffType>(
+    s1: Iter1,
+    s2: Iter2,
+    args: &Args<f64, CutoffType>,
+) -> CutoffType::Output
+where
+    Iter1: IntoIterator,
+    Iter1::IntoIter: Clone + DoubleEndedIterator + Iterator<Item = Iter1::Item>,
+    Iter2: IntoIterator,
+    Iter2::IntoIter: Clone + DoubleEndedIterator + Iterator<Item = Iter2::Item>,
+    Iter1::Item: PartialEq<Iter2::Item> + HashableChar + Clone + Ord,
+    Iter2::Item: PartialEq<Iter1::Item> + HashableChar + Clone + Ord,
+    CutoffType: SimilarityCutoff<f64>,
+{
+    // If the score cutoff is greater than 100, return 0.0
+    if let Some(score_cutoff_value) = args.score_cutoff.cutoff() {
+        if score_cutoff_value > 100.0 {
+            return args.score_cutoff.score(0.0);
+        }
+    }
+
+    let s1_iter = s1.into_iter();
+    let s2_iter = s2.into_iter();
+
+    // Split and sort tokens
+    let tokens_a = sorted_split(s1_iter.clone());
+    let tokens_b = sorted_split(s2_iter.clone());
+
+    // Decompose into intersection and differences
+    let decomposition = set_decomposition(&tokens_a, &tokens_b);
+    let intersect = decomposition.intersection;
+    let diff_ab = decomposition.difference_ab;
+    let diff_ba = decomposition.difference_ba;
+
+    // If intersection is not empty and either diff is empty, return 100.0
+    if !intersect.is_empty() && (diff_ab.is_empty() || diff_ba.is_empty()) {
+        return args.score_cutoff.score(100.0);
+    }
+
+    // Join the differences
+    let diff_ab_joined = diff_ab.join();
+    let diff_ba_joined = diff_ba.join();
+
+    // Lengths
+    let ab_len = diff_ab_joined.len();
+    let ba_len = diff_ba_joined.len();
+    let sect_len = intersect.len();
+
+    // Compute ratio on joined tokens
+    let tokens_a_joined = tokens_a.join();
+    let tokens_b_joined = tokens_b.join();
+
+    let result = ratio_with_args(tokens_a_joined.clone(), tokens_b_joined.clone(), args);
+
+    // Extract result value or return early if None
+    let mut result_value = match result.into() {
+        Some(r) => r,
+        None => return args.score_cutoff.score(0.0),
+    };
+
+    // Compute adjusted lengths
+    let sect_len_bool = if sect_len > 0 { 1 } else { 0 };
+    let sect_ab_len = sect_len + sect_len_bool + ab_len;
+    let sect_ba_len = sect_len + sect_len_bool + ba_len;
+
+    let total_len = sect_ab_len + sect_ba_len;
+
+    // Compute cutoff distance
+    let cutoff_distance =
+        score_cutoff_to_distance(args.score_cutoff.cutoff().unwrap_or(0.0), total_len);
+
+    // Compute indel distance between diff_ab_joined and diff_ba_joined
+    let dist = indel_distance(&diff_ab_joined, &diff_ba_joined, Some(cutoff_distance));
+
+    if let Some(distance) = dist {
+        if distance <= cutoff_distance {
+            let norm_dist = norm_distance(distance, total_len);
+            result_value = result_value.max(norm_dist);
+        }
+    }
+
+    // Exit early if sect_len is zero
+    if sect_len == 0 {
+        return args.score_cutoff.score(result_value);
+    }
+
+    // Compute ratios based on sect_len, ab_len, ba_len
+    let sect_ab_dist = sect_len_bool + ab_len;
+    let sect_ab_total_len = sect_len + sect_ab_len;
+    let sect_ab_ratio = norm_distance(sect_ab_dist, sect_ab_total_len);
+
+    let sect_ba_dist = sect_len_bool + ba_len;
+    let sect_ba_total_len = sect_len + sect_ba_len;
+    let sect_ba_ratio = norm_distance(sect_ba_dist, sect_ba_total_len);
+
+    // Update result_value with the maximum ratio
+    result_value = result_value.max(sect_ab_ratio.max(sect_ba_ratio));
+
+    // Return the final result
+    args.score_cutoff.score(result_value)
+}
+
+/// Computes the Weighted Ratio (WRatio) between two sequences.
+///
+/// # Parameters
+/// - `s1`: The first sequence to compare.
+/// - `s2`: The second sequence to compare.
+/// - `args`: Additional arguments containing `score_cutoff` and `score_hint`.
+///
+/// # Returns
+/// - The Weighted Ratio between `s1` and `s2` or `None` if the computed ratio is below `score_cutoff`.
+///
+/// # Notes
+/// - If either sequence is empty, the function returns `None` for compatibility with FuzzyWuzzy.
+/// - The function scales and combines various ratio metrics to produce a comprehensive similarity score.
+pub fn wratio_with_args<Iter1, Iter2, CutoffType>(
+    s1: Iter1,
+    s2: Iter2,
+    args: &Args<f64, CutoffType>,
+) -> CutoffType::Output
+where
+    Iter1: IntoIterator,
+    Iter1::IntoIter: Clone + DoubleEndedIterator,
+    Iter2: IntoIterator,
+    Iter2::IntoIter: Clone + DoubleEndedIterator,
+    Iter1::Item: PartialEq<Iter2::Item> + HashableChar + Copy,
+    Iter2::Item: PartialEq<Iter1::Item> + HashableChar + Copy,
+    CutoffType: SimilarityCutoff<f64>,
+{
+    // If the score cutoff is greater than 100, return the appropriate score.
+    if let Some(score_cutoff_value) = args.score_cutoff.cutoff() {
+        if score_cutoff_value > 100.0 {
+            return args.score_cutoff.score(0.0);
+        }
+    }
+
+    const UNBASE_SCALE: f64 = 0.95;
+
+    let s1_iter = s1.into_iter();
+    let s2_iter = s2.into_iter();
+
+    let len1 = s1_iter.clone().count();
+    let len2 = s2_iter.clone().count();
+
+    // For compatibility with FuzzyWuzzy, return `None` if either sequence is empty.
+    if len1 == 0 || len2 == 0 {
+        return args.score_cutoff.score(0.0);
+    }
+
+    // Calculate the length ratio.
+    let len_ratio = if len1 > len2 {
+        len1 as f64 / len2 as f64
+    } else {
+        len2 as f64 / len1 as f64
+    };
+
+    // Compute the initial ratio using the `ratio_with_args` function.
+    let end_ratio = ratio_with_args(s1_iter.clone(), s2_iter.clone(), args);
+
+    // Extract the end_ratio value or return early if `None`.
+    let mut end_ratio_value = match end_ratio.into() {
+        Some(r) => r,
+        None => return args.score_cutoff.score(0.0),
+    };
+
+    if len_ratio < 1.5 {
+        // Adjust the score cutoff based on UNBASE_SCALE.
+        let adjusted_cutoff =
+            f64::max(args.score_cutoff.cutoff().unwrap_or(0.0), end_ratio_value) / UNBASE_SCALE;
+
+        // Create new args with adjusted cutoff.
+        let new_args = args.clone().score_cutoff(adjusted_cutoff);
+
+        // Compute token_ratio using the adjusted cutoff.
+        let token_ratio_value = token_ratio_with_args(s1_iter.clone(), s2_iter.clone(), &new_args);
+
+        // Multiply by UNBASE_SCALE and update the final score.
+        let scaled_token_ratio = match token_ratio_value {
+            Some(r) => r * UNBASE_SCALE,
+            None => end_ratio_value, // If token_ratio is None, retain end_ratio_value.
+        };
+
+        // Update end_ratio_value with the maximum of end_ratio and scaled_token_ratio.
+        end_ratio_value = f64::max(end_ratio_value, scaled_token_ratio);
+        return args.score_cutoff.score(end_ratio_value);
+    }
+
+    // Determine the partial scaling factor based on the length ratio.
+    let partial_scale = if len_ratio < 8.0 { 0.9 } else { 0.6 };
+
+    // Adjust score_cutoff based on PARTIAL_SCALE.
+    let adjusted_cutoff =
+        f64::max(args.score_cutoff.cutoff().unwrap_or(0.0), end_ratio_value) / partial_scale;
+
+    // Create new args with adjusted cutoff.
+    let new_args = args.clone().score_cutoff(adjusted_cutoff);
+
+    // Compute partial_ratio using the adjusted cutoff.
+    let partial_ratio_value = partial_ratio_with_args(s1_iter.clone(), s2_iter.clone(), &new_args);
+
+    // Update end_ratio_value with the maximum value.
+    if let Some(partial_ratio_result) = partial_ratio_value {
+        let scaled_partial_ratio = partial_ratio_result * partial_scale;
+        end_ratio_value = f64::max(end_ratio_value, scaled_partial_ratio);
+    }
+
+    // Adjust score_cutoff again based on UNBASE_SCALE.
+    let final_cutoff =
+        f64::max(args.score_cutoff.cutoff().unwrap_or(0.0), end_ratio_value) / UNBASE_SCALE;
+
+    // Create new args with adjusted cutoff.
+    let new_args = args.clone().score_cutoff(final_cutoff);
+
+    // Compute partial_token_ratio using the adjusted cutoff.
+    let partial_token_ratio_value =
+        partial_token_ratio_with_args(s1_iter.clone(), s2_iter.clone(), &new_args);
+
+    // Update end_ratio_value with the maximum value.
+    if let Some(partial_token_ratio_result) = partial_token_ratio_value {
+        let scaled_partial_token_ratio = partial_token_ratio_result * UNBASE_SCALE * partial_scale;
+        end_ratio_value = f64::max(end_ratio_value, scaled_partial_token_ratio);
+    }
+
+    // Return the final end_ratio_value using the `score` method.
+    args.score_cutoff.score(end_ratio_value)
+}
+
+/// Computes the Weighted Ratio (WRatio) between two sequences.
+///
+/// This is a convenience function that uses default arguments.
+///
+/// # Parameters
+/// - `s1`: The first sequence to compare.
+/// - `s2`: The second sequence to compare.
+///
+/// # Returns
+/// - The Weighted Ratio between `s1` and `s2` as a `f64`.
+///
+/// # Example
+/// ```
+/// use rapidfuzz::fuzz::wratio;
+///
+/// let s1 = "fuzzy wuzzy was a bear";
+/// let s2 = "wuzzy fuzzy was a bear";
+///
+/// let score = wratio(s1.chars(), s2.chars(), 0.0);
+/// assert_eq!(score, 100.0);
+/// ```
+pub fn wratio<Iter1, Iter2>(s1: Iter1, s2: Iter2, score_cutoff: f64) -> f64
+where
+    Iter1: IntoIterator,
+    Iter1::IntoIter: Clone + DoubleEndedIterator,
+    Iter2: IntoIterator,
+    Iter2::IntoIter: Clone + DoubleEndedIterator,
+    Iter1::Item: PartialEq<Iter2::Item> + HashableChar + Copy,
+    Iter2::Item: PartialEq<Iter1::Item> + HashableChar + Copy,
+{
+    wratio_with_args(s1, s2, &Args::default().score_cutoff(score_cutoff)).unwrap_or(0.0)
+}
+
 #[must_use]
 #[derive(Clone, Copy, Debug)]
 pub struct Args<ResultType, CutoffType> {
