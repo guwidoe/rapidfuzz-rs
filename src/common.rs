@@ -1,4 +1,59 @@
+use std::cmp::Ord;
 use std::fmt::Debug;
+use std::iter::Peekable;
+use std::vec::Vec;
+
+use crate::details::splitted_sentence::{is_space, IsSpace, SplittedSentence};
+use crate::HashableChar;
+
+/// Splits an input iterator into tokens based on whitespace, sorts them, and returns a `SplittedSentence`.
+///
+/// # Parameters
+/// - `input`: An iterator over the input sequence.
+///
+/// # Returns
+/// - A `SplittedSentence` containing sorted tokens.
+///
+/// # Notes
+/// - Tokens are split based on whitespace characters determined by the `is_space` function.
+/// - The function collects tokens into a vector of ranges or slices, sorts them, and constructs a `SplittedSentence`.
+pub fn sorted_split<Iter, CharT>(input: Iter) -> SplittedSentence<CharT>
+where
+    Iter: IntoIterator<Item = CharT>,
+    Iter::IntoIter: Clone + Iterator<Item = CharT>,
+    CharT: IsSpace + HashableChar + Copy + Ord,
+{
+    let mut splitted: Vec<Vec<CharT>> = Vec::new();
+    let mut iter = input.into_iter().peekable();
+
+    while let Some(&ch) = iter.peek() {
+        // Skip over any whitespace characters
+        if is_space(ch) {
+            iter.next();
+            continue;
+        }
+
+        // Collect the token
+        let mut token = Vec::new();
+        while let Some(&ch) = iter.peek() {
+            if is_space(ch) {
+                break;
+            }
+            token.push(ch);
+            iter.next();
+        }
+
+        if !token.is_empty() {
+            splitted.push(token);
+        }
+    }
+
+    // Sort the tokens
+    splitted.sort();
+
+    // Construct a SplittedSentence from the sorted tokens
+    SplittedSentence::new(splitted)
+}
 
 #[derive(Default, Copy, Clone)]
 pub struct NoScoreCutoff;
