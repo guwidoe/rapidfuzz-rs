@@ -1,10 +1,69 @@
 use std::cmp::Ord;
 use std::fmt::Debug;
-use std::iter::Peekable;
 use std::vec::Vec;
 
 use crate::details::splitted_sentence::{is_space, IsSpace, SplittedSentence};
 use crate::HashableChar;
+
+#[derive(Debug, Clone)]
+pub struct DecomposedSet<CharT> {
+    pub difference_ab: SplittedSentence<CharT>,
+    pub difference_ba: SplittedSentence<CharT>,
+    pub intersection: SplittedSentence<CharT>,
+}
+
+/// Computes the decomposition of two splitted sentences into their intersection and differences.
+///
+/// This function mirrors the logic of the C++ version:
+/// - Dedupe both `a` and `b`
+/// - Compute intersection and differences
+///
+/// # Parameters
+/// - `a`: a `SplittedSentence<CharT>`
+/// - `b`: a `SplittedSentence<CharT>`
+///
+/// # Returns
+/// - `DecomposedSet<CharT>` containing difference_ab, difference_ba, and intersection
+///
+/// # Requirements
+/// `CharT` must implement `IsSpace`, `HashableChar`, `Copy`, and `Ord` to ensure tokens are deduplicated and searchable.
+pub fn set_decomposition<CharT>(
+    mut a: SplittedSentence<CharT>,
+    mut b: SplittedSentence<CharT>,
+) -> DecomposedSet<CharT>
+where
+    CharT: IsSpace + HashableChar + Copy + Ord,
+{
+    // Deduplicate both splitted sentences
+    a.dedupe();
+    b.dedupe();
+
+    // difference_ba initially contains all words from b
+    let mut difference_ba_tokens = b.words().clone();
+    let mut intersection_tokens = Vec::new();
+    let mut difference_ab_tokens = Vec::new();
+
+    // For each token in a, check if it exists in difference_ba_tokens
+    for current_a in a.words() {
+        if let Some(pos) = difference_ba_tokens
+            .iter()
+            .position(|word| word == current_a)
+        {
+            // Found common token, move it to intersection
+            difference_ba_tokens.remove(pos);
+            intersection_tokens.push(current_a.clone());
+        } else {
+            // Token does not exist in b, add to difference_ab
+            difference_ab_tokens.push(current_a.clone());
+        }
+    }
+
+    DecomposedSet {
+        difference_ab: SplittedSentence::new(difference_ab_tokens),
+        difference_ba: SplittedSentence::new(difference_ba_tokens),
+        intersection: SplittedSentence::new(intersection_tokens),
+    }
+}
 
 /// Splits an input iterator into tokens based on whitespace, sorts them, and returns a `SplittedSentence`.
 ///
@@ -137,5 +196,48 @@ where
 
     fn score(&self, raw: T) -> Self::Output {
         (raw >= self.0).then_some(raw)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_set_decomposition() {
+        let s1_tokens = vec![
+            vec!['f', 'u', 'z', 'z', 'y'],
+            vec!['w', 'u', 'z', 'z', 'y'],
+            vec!['w', 'a', 's'],
+        ];
+        let s2_tokens = vec![
+            vec!['f', 'u', 'z', 'z', 'y'],
+            vec!['f', 'u', 'z', 'z', 'y'],
+            vec!['b', 'e', 'a', 'r'],
+        ];
+        let s1 = SplittedSentence::new(s1_tokens);
+        let s2 = SplittedSentence::new(s2_tokens);
+
+        let result = set_decomposition(s1, s2);
+
+        // After dedupe:
+        // s1 words: fuzzy, wuzzy, was
+        // s2 words: fuzzy, bear
+        // intersection: fuzzy
+        // difference_ab: wuzzy, was
+        // difference_ba: bear
+
+        assert_eq!(
+            result.intersection.words(),
+            &vec![vec!['f', 'u', 'z', 'z', 'y']]
+        );
+        assert_eq!(
+            result.difference_ab.words(),
+            &vec![vec!['w', 'u', 'z', 'z', 'y'], vec!['w', 'a', 's']]
+        );
+        assert_eq!(
+            result.difference_ba.words(),
+            &vec![vec!['b', 'e', 'a', 'r']]
+        );
     }
 }

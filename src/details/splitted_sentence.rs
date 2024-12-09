@@ -1,5 +1,5 @@
 use crate::HashableChar;
-use std::cmp::Ordering;
+
 // src/details/splitted_sentence.rs
 
 /// Trait to determine if a character is a whitespace and to provide a space character.
