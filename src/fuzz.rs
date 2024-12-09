@@ -4,7 +4,7 @@ use crate::common::{
 use crate::details::distance::MetricUsize;
 use crate::details::splitted_sentence::{IsSpace, SplittedSentence};
 use crate::distance::indel;
-use crate::HashableChar; // assuming this is where ratio_with_args is located
+use crate::HashableChar;
 
 pub fn score_cutoff_to_distance(score_cutoff: f64, lensum: usize) -> usize {
     ((lensum as f64) * (1.0 - score_cutoff / 100.0)).ceil() as usize
@@ -873,7 +873,7 @@ mod tests {
         let s2 = "hello world";
         let args = Args::default();
         let score = ratio_with_args(s1.chars(), s2.chars(), &args) * 100.00;
-        assert!(score < 100.0); // Assuming case-sensitive
+        assert!(score < 100.0);
     }
 
     #[test]
@@ -956,9 +956,6 @@ mod tests {
         let s2 = "quick brown fox";
         let args = Args::default();
         let score = token_ratio_with_args(s1.chars(), s2.chars(), &args);
-        // Depending on implementation, adjust the expectation
-        // If case-insensitive: assert_eq!(score, 100.0);
-        // If case-sensitive: assert_eq!(score, 100.0); // Assuming tokens are matched regardless of case
         assert!(score >= 100.0 || score < 100.0); // Placeholder
     }
 
@@ -1071,7 +1068,7 @@ mod tests {
         let s2 = "hello world";
         let args = Args::default().score_cutoff(0.00);
         let score = wratio_with_args(s1.chars(), s2.chars(), &args);
-        assert!(score.unwrap() < 100.0); // Assuming case-sensitive
+        assert!(score.unwrap() < 100.0);
     }
 
     #[test]
@@ -1275,7 +1272,7 @@ mod tests {
         let s2 = "hello world";
         let args = Args::default();
         let score = token_ratio_with_args(s1.chars(), s2.chars(), &args);
-        assert_eq!(score, 100.0); // Assuming multiple spaces are treated as single tokens
+        assert_eq!(score, 100.0);
     }
 
     // 12. Tests for Non-ASCII Characters and Normalization
@@ -1547,7 +1544,7 @@ mod tests {
         let s2 = "hello world";
         let args = Args::default();
         let score = token_ratio_with_args(s1.chars(), s2.chars(), &args);
-        assert_eq!(score, 100.0); // Assuming multiple spaces are treated as single tokens
+        assert_eq!(score, 100.0);
     }
 
     #[test]
