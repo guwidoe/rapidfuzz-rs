@@ -92,8 +92,7 @@ where
     /// Returns the number of duplicates removed.
     pub fn dedupe(&mut self) -> usize {
         let old_word_count = self.word_count();
-        self.tokens.sort();
-        self.tokens.dedup();
+        self.tokens.dedup(); // Removes consecutive duplicates while preserving order.
         old_word_count - self.word_count()
     }
 
