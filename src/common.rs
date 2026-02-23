@@ -114,6 +114,15 @@ where
     SplittedSentence::new(splitted)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScoreAlignment {
+    pub score: f64,
+    pub src_start: usize,
+    pub src_end: usize,
+    pub dest_start: usize,
+    pub dest_end: usize,
+}
+
 #[derive(Default, Copy, Clone)]
 pub struct NoScoreCutoff;
 #[derive(Default, Copy, Clone)]
@@ -164,9 +173,11 @@ where
     T: Copy,
 {
     type Output: Copy + Into<Option<T>> + PartialEq + Debug;
+    type AlignmentOutput: Copy + Into<Option<ScoreAlignment>> + PartialEq + Debug;
 
     fn cutoff(&self) -> Option<T>;
     fn score(&self, raw: T) -> Self::Output;
+    fn alignment(&self, raw: Option<ScoreAlignment>) -> Self::AlignmentOutput;
 }
 
 impl<T> SimilarityCutoff<T> for NoScoreCutoff
@@ -174,6 +185,7 @@ where
     T: Copy + PartialEq + Debug,
 {
     type Output = T;
+    type AlignmentOutput = ScoreAlignment;
 
     fn cutoff(&self) -> Option<T> {
         None
@@ -182,6 +194,10 @@ where
     fn score(&self, raw: T) -> Self::Output {
         raw
     }
+
+    fn alignment(&self, raw: Option<ScoreAlignment>) -> Self::AlignmentOutput {
+        raw.expect("alignment must be present when no score cutoff is set")
+    }
 }
 
 impl<T> SimilarityCutoff<T> for WithScoreCutoff<T>
@@ -189,6 +205,7 @@ where
     T: Copy + PartialOrd + Debug,
 {
     type Output = Option<T>;
+    type AlignmentOutput = Option<ScoreAlignment>;
 
     fn cutoff(&self) -> Option<T> {
         Some(self.0)
@@ -196,6 +213,10 @@ where
 
     fn score(&self, raw: T) -> Self::Output {
         (raw >= self.0).then_some(raw)
+    }
+
+    fn alignment(&self, raw: Option<ScoreAlignment>) -> Self::AlignmentOutput {
+        raw
     }
 }
 
